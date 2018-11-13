@@ -1,70 +1,13 @@
 pipeline {
     agent any
-    environment {
-    	MAJOR_VERSION = 1
-    }
     stages {
         stage('Build') {
             steps {
                 echo 'Running build automation'
-		sh './gradlew build --no-daemon'
+                sh './gradlew build --no-daemon'
+                archiveArtifacts artifacts: 'dist/trainSchedule.zip'
             }
         }
-	stage('Archive Artifact') {
-            steps {
-                echo 'Archive Artifact'
-		archiveArtifacts artifacts: 'dist/trainSchedule.zip'
-            }
-        }
-	    stage('Promote Development Branch to Master') {
-      agent {
-        label 'apache'
-      }
-      when {
-        branch 'development'
-      }
-      steps {
-        echo "Stashing Any Local Changes"
-        sh 'git stash'
-        echo "Checking Out Development Branch"
-        sh 'git checkout development'
-        echo 'Checking Out Master Branch'
-        sh 'git pull origin'
-        sh 'git checkout master'
-        echo 'Merging Development into Master Branch'
-        sh 'git merge development'
-        echo 'Pushing to Origin Master'
-        sh 'git push origin master'
-        echo 'Tagging the Release'
-        sh "git tag rectangle-${env.MAJOR_VERSION}.${env.BUILD_NUMBER}"
-        sh "git push origin rectangle-${env.MAJOR_VERSION}.${env.BUILD_NUMBER}"
-      }
-      post {
-        success {
-          emailext(
-            subject: "${env.JOB_NAME} [${env.BUILD_NUMBER}] Development Promoted to Master",
-            body: """<p>'${env.JOB_NAME} [${env.BUILD_NUMBER}]' Development Promoted to Master":</p>
-            <p>Check console output at &QUOT;<a href='${env.BUILD_URL}'>${env.JOB_NAME} [${env.BUILD_NUMBER}]</a>&QUOT;</p>""",
-            to: "pradeep.edirisinghe@accenture.com"
-          )
-        }
-      }
-    }
-  }
-  post {
-    failure {
-      emailext(
-        subject: "${env.JOB_NAME} [${env.BUILD_NUMBER}] Failed!",
-        body: """<p>'${env.JOB_NAME} [${env.BUILD_NUMBER}]' Failed!":</p>
-        <p>Check console output at &QUOT;<a href='${env.BUILD_URL}'>${env.JOB_NAME} [${env.BUILD_NUMBER}]</a>&QUOT;</p>""",
-        to: "pradeep.edirisinghe@accenture.com"
-      )
-    }
-  }
-	    
-	    
-	    
-	    
         stage('Build Docker Image') {
             when {
                 branch 'master'
@@ -84,76 +27,33 @@ pipeline {
             }
             steps {
                 script {
-                    docker.withRegistry('https://registry.hub.docker.com', 'DockerHub_login') {
+                    docker.withRegistry('https://registry.hub.docker.com', 'docker_hub_login') {
                         app.push("${env.BUILD_NUMBER}")
                         app.push("latest")
                     }
                 }
             }
         }
-	stage('DeployToStaging') {
-	    when {
+        stage('DeployToProduction') {
+            when {
                 branch 'master'
             }
             steps {
-		echo 'Deploy To Staging'
+                input 'Deploy to Production?'
+                milestone(1)
                 withCredentials([usernamePassword(credentialsId: 'webserver_login', usernameVariable: 'USERNAME', passwordVariable: 'USERPASS')]) {
-                    sshPublisher(
-                        failOnError: true,
-                        continueOnError: false,
-                        publishers: [
-                            sshPublisherDesc(
-                                configName: 'staging',
-                                sshCredentials: [
-                                    username: "$USERNAME",
-                                    encryptedPassphrase: "$USERPASS"
-                                ], 
-                                transfers: [
-                                    sshTransfer(
-                                        sourceFiles: 'dist/trainSchedule.zip',
-                                        removePrefix: 'dist/',
-                                        remoteDirectory: '/tmp',
-                                        execCommand: 'sudo /usr/bin/systemctl stop train-schedule && rm -rf /opt/train-schedule/* && unzip /tmp/trainSchedule.zip -d /opt/train-schedule && sudo /usr/bin/systemctl start train-schedule'
-                                    )
-                                ]
-                            )
-                        ]
-                    )
+                    script {
+                        sh "sshpass -p '$USERPASS' -v ssh -o StrictHostKeyChecking=no $USERNAME@$prod_ip \"docker pull willbla/train-schedule:${env.BUILD_NUMBER}\""
+                        try {
+                            sh "sshpass -p '$USERPASS' -v ssh -o StrictHostKeyChecking=no $USERNAME@$production \"docker stop train-schedule\""
+                            sh "sshpass -p '$USERPASS' -v ssh -o StrictHostKeyChecking=no $USERNAME@$production \"docker rm train-schedule\""
+                        } catch (err) {
+                            echo: 'caught error: $err'
+                        }
+                        sh "sshpass -p '$USERPASS' -v ssh -o StrictHostKeyChecking=no $USERNAME@$prod_ip \"docker run --restart always --name train-schedule -p 8080:8080 -d pradeepe/train-schedule:${env.BUILD_NUMBER}\""
+                    }
                 }
             }
         }
-	    
-	stage('DeployToProduction') {
-	    when {
-                branch 'master'
-            }
-            steps {
-		input 'Deploy to Production?'
-		echo 'Production Deploy'
-                withCredentials([usernamePassword(credentialsId: 'webserver_login', usernameVariable: 'USERNAME', passwordVariable: 'USERPASS')]) {
-                    sshPublisher(
-                        failOnError: true,
-                        continueOnError: false,
-                        publishers: [
-                            sshPublisherDesc(
-                                configName: 'production',
-                                sshCredentials: [
-                                    username: "$USERNAME",
-                                    encryptedPassphrase: "$USERPASS"
-                                ], 
-                                transfers: [
-                                    sshTransfer(
-                                        sourceFiles: 'dist/trainSchedule.zip',
-                                        removePrefix: 'dist/',
-                                        remoteDirectory: '/tmp',
-                                        execCommand: 'sudo /usr/bin/systemctl stop train-schedule && rm -rf /opt/train-schedule/* && unzip /tmp/trainSchedule.zip -d /opt/train-schedule && sudo /usr/bin/systemctl start train-schedule'
-                                    )
-                                ]
-                            )
-                        ]
-                    )
-                }
-            }
-        }   
     }
 }
