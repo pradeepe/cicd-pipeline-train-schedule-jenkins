@@ -4,13 +4,17 @@ pipeline {
     stages {
         stage('Build') {
             steps {
-                echo 'Running build automation **'
+                echo '*******************************************************************'
+		echo '**                Running build automation                       **'
+		echo '*******************************************************************'
 		sh './gradlew build --no-daemon'
             }
         }
 	stage('Archive Artifact') {
             steps {
-                echo 'Archive Artifact'
+		echo '*******************************************************************'
+		echo '**                        Archive Artifact                       **'
+		echo '*******************************************************************'
 		archiveArtifacts artifacts: 'dist/trainSchedule.zip'
             }
         }
@@ -19,9 +23,16 @@ pipeline {
                 branch 'master'
             }
             steps {
+		    
+		echo '*******************************************************************'
+		echo '**                      Build Docker Image                       **'
+		echo '*******************************************************************'
                 script {
                     app = docker.build("pradeepe/train-schedule")
                     app.inside {
+			echo '*******************************************************************'
+			echo '**                         smoke test                            **'
+			echo '*******************************************************************'
                         sh 'echo $(curl localhost:8080)'
                     }
                 }
@@ -33,6 +44,9 @@ pipeline {
             }
             steps {
                 script {
+		    echo '*******************************************************************'
+		    echo '**                    Push Docker Image                          **'
+		    echo '*******************************************************************'
                     docker.withRegistry('https://registry.hub.docker.com', 'DockerHub_login') {
                         app.push("${env.BUILD_NUMBER}")
                         app.push("latest")
@@ -45,7 +59,9 @@ pipeline {
                 branch 'master'
             }
             steps {
-		echo 'Deploy To Staging'
+		echo '*******************************************************************'
+		echo '**                    Deploy To Staging                          **'
+		echo '*******************************************************************'
                 withCredentials([usernamePassword(credentialsId: 'webserver_login', usernameVariable: 'USERNAME', passwordVariable: 'USERPASS')]) {
                     sshPublisher(
                         failOnError: true,
